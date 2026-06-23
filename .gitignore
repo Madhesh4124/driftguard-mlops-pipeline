@@ -1,0 +1,25 @@
+AGENTS.md
+implementation_plan.md
+mlops_pipeline.md
+.venv
+
+# MLflow
+mlflow.db
+mlruns/
+
+# Data files
+data/holdout.parquet
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated data and reports
+reports/
+
+# Documentation
+STUDY.md
+setup.md
+
+

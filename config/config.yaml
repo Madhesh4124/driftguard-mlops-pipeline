@@ -1,0 +1,35 @@
+kafka:
+  bootstrap_servers: "localhost:9092"
+  topics:
+    raw_data: "raw-data-topic"
+    valid_data: "valid-data-topic"
+    retrain_events: "retrain-events-topic"
+    dead_letter: "dead-letter-topic"
+  producer_delay_ms: 100
+
+data:
+  phase1_rows: 15000
+  phase2_rows: 10000
+
+drift:
+  reference_window_size: 1000
+  current_window_size: 500
+  detection_interval: 100        # run KS-test every N rows, not every row
+  ks_threshold: 0.05
+  min_features_drifted: 2
+  monitored_features:
+    - AGE
+    - LIMIT_BAL
+    - BILL_AMT1
+    - PAY_AMT1
+
+retraining:
+  n_trials: 30
+  val_split: 0.15
+  holdout_split: 0.15
+  promotion_threshold: 0.005     # challenger must beat champion F1 by this margin
+
+mlflow:
+  tracking_uri: "sqlite:///mlflow.db"
+  experiment_name: "Drift-Guard-MLOPS-Pipeline"
+  model_name: "credit-default-classifier"

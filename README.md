@@ -10,9 +10,6 @@
 
 DriftGuard is a production-inspired, closed-loop MLOps system that streams credit client records, validates incoming features against schemas, monitors for statistical data drift, automatically triggers hyperparameter-optimized model retraining, and serves predictions via a FastAPI endpoints.
 
-> [!NOTE]
-> For a line-by-line developer code walkthrough, technical interview question list, and statistical explanations, check out the **[Complete Study Guide](file:///D:/CODE/Projects/Event-Driven%20MLOPS/STUDY.md)**.
-
 ---
 
 ## 1. System Topology & Data Flow

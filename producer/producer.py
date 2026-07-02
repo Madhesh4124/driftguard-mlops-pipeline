@@ -2,15 +2,24 @@ import time
 import json
 import pandas as pd
 import sys
+import random
 from utils.config_loader import load_config
 from utils.kafka_utils import get_producer
 
-def delivery_report(err, msg):
-    if err is not None:
-        print(f"Message delivery failed: {err}", file=sys.stderr)
-    # Silent on success to avoid stdout flooding, or print occasionally
+# Global counters for summary statistics
+produced_count = 0
+failed_count = 0
 
-def stream_data(config_path=None):
+def delivery_report(err, msg):
+    global produced_count, failed_count
+    if err is not None:
+        print(f"[Producer] Message delivery failed: {err}", file=sys.stderr)
+        failed_count += 1
+    else:
+        produced_count += 1
+
+def stream_data(config_path=None, corrupt_rate=0.0):
+    global produced_count, failed_count
     config = load_config(config_path)
     topic = config["kafka"]["topics"]["raw_data"]
     delay_s = config["kafka"]["producer_delay_ms"] / 1000.0
@@ -24,6 +33,8 @@ def stream_data(config_path=None):
         sys.exit(1)
 
     print(f"Initializing Kafka producer and streaming to topic: {topic}...")
+    if corrupt_rate > 0:
+        print(f"[Producer] WARNING: Corruption injection active at rate {corrupt_rate:.2%}")
     producer = get_producer(config)
 
     total_rows = len(df)
@@ -40,8 +51,28 @@ def stream_data(config_path=None):
             if idx % 500 == 0:
                 print(f"[Producer] Streaming index: {idx}/{total_rows} | Current Phase: {phase}")
 
-            # Serialize to JSON and encode to bytes
-            payload = json.dumps(record).encode("utf-8")
+            # Corrupt record optionally to test DLQ
+            corrupt_record = False
+            corrupt_json = False
+            
+            if corrupt_rate > 0 and random.random() < corrupt_rate:
+                if random.random() < 0.5:
+                    corrupt_record = True  # Value corruption (fails schema)
+                else:
+                    corrupt_json = True    # JSON structure corruption
+            
+            if corrupt_record:
+                # Corrupt age and limit balance to violate constraints
+                record["AGE"] = -5.0
+                record["LIMIT_BAL"] = -100.0
+                payload = json.dumps(record).encode("utf-8")
+                print(f"[Producer] Injecting VALUE corruption at index {idx}")
+            elif corrupt_json:
+                # Append malformed string to make it invalid JSON
+                payload = (json.dumps(record) + "invalid_json_payload}").encode("utf-8")
+                print(f"[Producer] Injecting JSON corruption at index {idx}")
+            else:
+                payload = json.dumps(record).encode("utf-8")
             
             # Asynchronously send record to raw-data-topic
             producer.produce(
@@ -61,7 +92,19 @@ def stream_data(config_path=None):
     finally:
         # Wait for outstanding messages to be delivered
         producer.flush()
+        print("\n--- Producer Summary ---")
+        print(f"Total Messages successfully delivered: {produced_count}")
+        print(f"Total Messages failed:                 {failed_count}")
         print("Producer stopped.")
 
 if __name__ == "__main__":
-    stream_data()
+    import argparse
+    parser = argparse.ArgumentParser(description="Kafka Data Stream Producer")
+    parser.add_argument(
+        "--corrupt-rate",
+        type=float,
+        default=0.0,
+        help="Fraction of records to corrupt (e.g. 0.05 for 5%)"
+    )
+    args = parser.parse_args()
+    stream_data(corrupt_rate=args.corrupt_rate)

@@ -7,19 +7,20 @@ mlops_pipeline.md
 mlflow.db
 mlruns/
 
-# Data files
-data/holdout.parquet
-
 # Python cache
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
 
 # Generated data and reports
 reports/
+data/*.jsonl
+data/holdout.parquet
 
 # Documentation
 STUDY.md
 setup.md
+resume_alignment_report.md
 
 

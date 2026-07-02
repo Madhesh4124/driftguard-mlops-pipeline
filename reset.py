@@ -108,16 +108,22 @@ def reset_project():
     else:
         print("[Reset] No mlruns directory found to delete.")
 
-    # 3. Delete holdout.parquet file
-    holdout_path = "data/holdout.parquet"
-    if os.path.exists(holdout_path):
-        try:
-            os.remove(holdout_path)
-            print(f"[Reset] Deleted holdout parquet split: {holdout_path}")
-        except Exception as e:
-            print(f"[Reset] Warning: Could not delete {holdout_path}: {e}")
-    else:
-        print("[Reset] No holdout parquet file found to delete.")
+    # 3. Delete holdout.parquet file and other generated data/logs
+    files_to_delete = [
+        "data/holdout.parquet",
+        "data/validated_history.jsonl",
+        "data/prediction_log.jsonl",
+        "data/dlq_rejections.jsonl"
+    ]
+    for file_path in files_to_delete:
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                print(f"[Reset] Deleted: {file_path}")
+            except Exception as e:
+                print(f"[Reset] Warning: Could not delete {file_path}: {e}")
+        else:
+            print(f"[Reset] No {file_path} found to delete.")
 
     # 4. Reset Kafka topics
     print("[Reset] Resetting Kafka topics...")

@@ -70,6 +70,7 @@ flowchart TD
   * [producer.py](file:///D:/CODE/Projects/Event-Driven%20MLOPS/producer/producer.py): streams records into raw Kafka topic.
 * 📁 **[consumer/](file:///D:/CODE/Projects/Event-Driven%20MLOPS/consumer)**
   * [validator.py](file:///D:/CODE/Projects/Event-Driven%20MLOPS/consumer/validator.py): Filters invalid records to the Dead Letter Queue (DLQ).
+  * [dlq_consumer.py](file:///D:/CODE/Projects/Event-Driven%20MLOPS/consumer/dlq_consumer.py): Monitors the Dead Letter Queue (DLQ) and tracks rejections.
   * [drift_monitor.py](file:///D:/CODE/Projects/Event-Driven%20MLOPS/consumer/drift_monitor.py): Implements sliding window KS-test and triggers alerts.
   * [retraining_engine.py](file:///D:/CODE/Projects/Event-Driven%20MLOPS/consumer/retraining_engine.py): Listens for alerts, runs HPO, and registers challenger models.
 * 📁 **[model/](file:///D:/CODE/Projects/Event-Driven%20MLOPS/model)**
@@ -108,15 +109,18 @@ python -m model.train_baseline
 ```
 
 ### 4. Boot Up Event Consumers
-Launch three separate terminals, activate the virtual environment, and run:
+Launch four separate terminals, activate the virtual environment, and run:
 ```powershell
 # In terminal 1: Ingestion Quality Gateway
 python -u -m consumer.validator
 
-# In terminal 2: KS-Test Drift Watchdog
+# In terminal 2: Dead Letter Queue (DLQ) Auditor
+python -u -m consumer.dlq_consumer
+
+# In terminal 3: KS-Test Drift Watchdog
 python -u -m consumer.drift_monitor
 
-# In terminal 3: Automated Retraining Listener
+# In terminal 4: Automated Retraining Listener
 python -u -m consumer.retraining_engine
 ```
 

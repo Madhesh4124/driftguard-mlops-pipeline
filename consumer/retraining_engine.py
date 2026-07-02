@@ -48,9 +48,19 @@ def listen_for_retrain_events(config_path=None):
             print(f"Snapshot size: {len(snapshot_data)} rows")
             print(f"==================================================")
 
-            # 1. Convert snapshot to DataFrame
-            df_snapshot = pd.DataFrame(snapshot_data)
+            # 1. Load accumulated valid records if available, else fallback to snapshot
+            if os.path.exists("data/validated_history.jsonl"):
+                print("[Retrainer] Loading accumulated historical valid records from data/validated_history.jsonl...")
+                df_snapshot = pd.read_json("data/validated_history.jsonl", lines=True)
+            else:
+                print("[Retrainer] validated_history.jsonl not found. Falling back to event snapshot data...")
+                df_snapshot = pd.DataFrame(snapshot_data)
             
+            # Minimum data size guard
+            if len(df_snapshot) < 1000:
+                print(f"[Retrainer] Too few samples ({len(df_snapshot)}). Skipping retraining.")
+                continue
+
             # Clean ID column if it exists
             if "ID" in df_snapshot.columns:
                 df_snapshot = df_snapshot.drop(columns=["ID"])
@@ -59,34 +69,65 @@ def listen_for_retrain_events(config_path=None):
             X_snap = df_snapshot.drop(columns=[target_col])
             y_snap = df_snapshot[target_col]
 
-            # 2. Perform train/validation/holdout splits
-            X_train_val, X_eval, y_train_val, y_eval = train_test_split(
-                X_snap, y_snap, test_size=holdout_split, random_state=42, stratify=y_snap
-            )
-            X_train, X_val, y_train, y_val = train_test_split(
-                X_train_val, y_train_val, test_size=val_split, random_state=42, stratify=y_train_val
-            )
+            # 2. Perform train/validation/holdout splits with stratification crash guard
+            try:
+                X_train_val, X_eval, y_train_val, y_eval = train_test_split(
+                    X_snap, y_snap, test_size=holdout_split, random_state=42, stratify=y_snap
+                )
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X_train_val, y_train_val, test_size=val_split, random_state=42, stratify=y_train_val
+                )
+            except ValueError as e:
+                print(f"[Retrainer] Stratified split failed ({e}). Falling back to random split.")
+                X_train_val, X_eval, y_train_val, y_eval = train_test_split(
+                    X_snap, y_snap, test_size=holdout_split, random_state=42
+                )
+                X_train, X_val, y_train, y_val = train_test_split(
+                    X_train_val, y_train_val, test_size=val_split, random_state=42
+                )
 
             parent_run_name = f"retraining_cycle_{cycle}"
             print(f"Starting MLflow parent run: {parent_run_name}...")
             
+            # Dynamically reduce Optuna trials if dataset is relatively small
+            current_trials = n_trials
+            if len(df_snapshot) < 2000:
+                current_trials = min(10, n_trials)
+                print(f"[Retrainer] Small dataset size ({len(df_snapshot)}). Reducing HPO trials to {current_trials}.")
+
             with mlflow.start_run(run_name=parent_run_name) as run:
                 mlflow.set_tags({
                     "cycle": str(cycle),
                     "drifted_features": ",".join(drifted_features)
                 })
-                mlflow.log_param("snapshot_size", len(snapshot_data))
+                mlflow.log_params({
+                    "snapshot_size": len(df_snapshot),
+                    "training_rows": len(X_train),
+                    "validation_rows": len(X_val),
+                    "eval_rows": len(X_eval)
+                })
 
                 # 3. Trigger Optuna HPO
-                print(f"Running HPO search ({n_trials} trials)...")
-                final_model, best_params = run_hpo(X_train, y_train, X_val, y_val, n_trials=n_trials)
+                print(f"Running HPO search ({current_trials} trials)...")
+                final_model, best_params = run_hpo(X_train, y_train, X_val, y_val, n_trials=current_trials)
                 
+                # Evaluate final model on the held-out eval set
+                from sklearn.metrics import f1_score
+                y_eval_pred = final_model.predict(X_eval)
+                eval_f1 = f1_score(y_eval, y_eval_pred)
+                mlflow.log_metric("retraining_eval_f1", eval_f1)
+                print(f"[Retrainer] Final model evaluated on retraining holdout. F1: {eval_f1:.4f}")
+
                 # 4. Log and register final model
                 print("Registering final model in Registry...")
+                from mlflow.models.signature import infer_signature
+                signature = infer_signature(X_train, final_model.predict(X_train))
+                
                 model_info = mlflow.xgboost.log_model(
                     final_model,
                     artifact_path="model",
-                    registered_model_name=model_name
+                    registered_model_name=model_name,
+                    signature=signature
                 )
                 
                 # Get the registered version number

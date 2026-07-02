@@ -32,33 +32,49 @@ def evaluate_and_promote(challenger_version, config_path=None):
 
     # 2. Load challenger model
     challenger_uri = f"models:/{model_name}/{challenger_version}"
-    challenger_model = mlflow.pyfunc.load_model(challenger_uri)
+    challenger_model = mlflow.xgboost.load_model(challenger_uri)
     challenger_pred = challenger_model.predict(X_holdout)
     challenger_f1 = f1_score(y_holdout, challenger_pred)
+    
+    from sklearn.metrics import roc_auc_score
+    challenger_prob = challenger_model.predict_proba(X_holdout)[:, 1]
+    challenger_roc = roc_auc_score(y_holdout, challenger_prob)
     
     client = MlflowClient()
     version_details = client.get_model_version(model_name, str(challenger_version))
     challenger_run_id = version_details.run_id
+
+    # Log challenger holdout metrics
+    client.log_metric(challenger_run_id, "holdout_f1", challenger_f1)
+    client.log_metric(challenger_run_id, "holdout_roc_auc", challenger_roc)
 
     # 3. Get current active Production model
     champion_version_obj = get_production_model(model_name)
     
     if champion_version_obj is not None:
         champion_version = champion_version_obj.version
-        champion_uri = f"models:/{model_name}/Production"
-        champion_model = mlflow.pyfunc.load_model(champion_uri)
+        champion_uri = f"models:/{model_name}@champion"
+        champion_model = mlflow.xgboost.load_model(champion_uri)
         champion_pred = champion_model.predict(X_holdout)
         champion_f1 = f1_score(y_holdout, champion_pred)
         
+        champion_prob = champion_model.predict_proba(X_holdout)[:, 1]
+        champion_roc = roc_auc_score(y_holdout, champion_prob)
+        
+        # Log champion holdout metrics to challenger's run for comparison
+        client.log_metric(challenger_run_id, "champion_holdout_f1", champion_f1)
+        client.log_metric(challenger_run_id, "champion_holdout_roc_auc", champion_roc)
+        
         metric_gap = challenger_f1 - champion_f1
+        client.log_metric(challenger_run_id, "metric_gap_f1", metric_gap)
+        
         print(f"Holdout Evaluation:")
-        print(f"Champion (v{champion_version}) F1: {champion_f1:.4f}")
-        print(f"Challenger (v{challenger_version}) F1: {challenger_f1:.4f}")
+        print(f"Champion (v{champion_version}) F1: {champion_f1:.4f} | ROC-AUC: {champion_roc:.4f}")
+        print(f"Challenger (v{challenger_version}) F1: {challenger_f1:.4f} | ROC-AUC: {challenger_roc:.4f}")
         print(f"Margin: {metric_gap:.4f} (Required: {promotion_threshold:.4f})")
 
         if challenger_f1 > champion_f1 + promotion_threshold:
             print("Challenger beats Champion by threshold. Promoting Challenger!")
-            # Promote challenger to Production and automatically archive old champion
             transition_stage(
                 model_name=model_name,
                 version=challenger_version,
@@ -84,8 +100,8 @@ def evaluate_and_promote(challenger_version, config_path=None):
         metric_gap = 0.0
         decision = "challenger_promoted"
 
-    # Log metrics & tag to the challenger run
-    log_promotion_decision(challenger_run_id, decision, metric_gap)
+    # Log promotion decision tag to the challenger run
+    client.set_tag(challenger_run_id, "promotion_decision", decision)
     print(f"Evaluation finished. Decision logged: {decision}")
     return decision
 

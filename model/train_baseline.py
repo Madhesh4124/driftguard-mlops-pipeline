@@ -4,11 +4,13 @@ from model.trainer import train_model
 import mlflow
 from mlflow.tracking import MlflowClient
 
-# Set tracking URI to local SQLite database and Experiment
-EXPERIMENT_NAME = "Drift-Guard-MLOPS-Pipeline"
-MODEL_NAME = "credit-default-classifier"
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
-mlflow.set_experiment(EXPERIMENT_NAME)
+from utils.config_loader import load_config
+
+# Load config dynamically
+config = load_config()
+MODEL_NAME = config["mlflow"]["model_name"]
+mlflow.set_tracking_uri(config["mlflow"]["tracking_uri"])
+mlflow.set_experiment(config["mlflow"]["experiment_name"])
 
 df = pd.read_csv("data/credit_default_two_phase.csv")
 data = df.iloc[:15000].copy()
@@ -75,11 +77,27 @@ with mlflow.start_run(run_name="baseline-training"):
     mlflow.log_params(params)
     mlflow.log_metrics(metrics)
     
-    # Log and register model in registry
+    # Log Confusion Matrix as an artifact
+    import matplotlib.pyplot as plt
+    from sklearn.metrics import ConfusionMatrixDisplay
+    import os
+    os.makedirs("reports", exist_ok=True)
+    fig, ax = plt.subplots()
+    disp = ConfusionMatrixDisplay(confusion_matrix=Confusion_Matrix, display_labels=["No Default", "Default"])
+    disp.plot(ax=ax)
+    fig.savefig("reports/confusion_matrix.png")
+    mlflow.log_artifact("reports/confusion_matrix.png")
+    plt.close(fig)
+    
+    # Log model with signature
+    from mlflow.models.signature import infer_signature
+    signature = infer_signature(X_train, model.predict(X_train))
+    
     model_info = mlflow.xgboost.log_model(
         model,
         artifact_path="model",
-        registered_model_name=MODEL_NAME
+        registered_model_name=MODEL_NAME,
+        signature=signature
     )
 
     # Get latest registered version
@@ -92,13 +110,8 @@ with mlflow.start_run(run_name="baseline-training"):
         )
     )
 
-# Promote latest version to Production
-    client.transition_model_version_stage(
-        name=MODEL_NAME,
-        version=latest_version,
-        stage="Production",
-        archive_existing_versions=True
-    )
+    # Promote latest version using the champion alias
+    client.set_registered_model_alias(MODEL_NAME, "champion", str(latest_version))
 
 print(metrics)
 print(Confusion_Matrix)

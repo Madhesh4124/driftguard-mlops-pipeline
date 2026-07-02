@@ -12,8 +12,9 @@ from contextlib import asynccontextmanager
 from utils.config_loader import load_config
 
 
-# Global variable to cache the loaded model
+# Global variable to cache the loaded model and its version
 cached_model = None
+cached_model_version = None
 features_order = [
     'LIMIT_BAL', 'SEX', 'EDUCATION', 'MARRIAGE', 'AGE',
     'PAY_0', 'PAY_2', 'PAY_3', 'PAY_4', 'PAY_5', 'PAY_6',
@@ -48,19 +49,22 @@ class CreditRecord(BaseModel):
 
 def load_production_model():
     """
-    Fetches the Production-tagged model from MLflow Model Registry and caches it.
+    Fetches the Champion-tagged model from MLflow Model Registry and caches it.
     """
-    global cached_model
+    global cached_model, cached_model_version
     config = load_config()
     mlflow.set_tracking_uri(config["mlflow"]["tracking_uri"])
     
     model_name = config["mlflow"]["model_name"]
-    model_uri = f"models:/{model_name}/Production"
+    model_uri = f"models:/{model_name}@champion"
     
-    print(f"Attempting to load Production model from URI: {model_uri}...")
+    print(f"Attempting to load Champion model from URI: {model_uri}...")
     try:
         cached_model = mlflow.xgboost.load_model(model_uri)
-        print("Production model successfully loaded and cached.")
+        client = mlflow.tracking.MlflowClient()
+        mv = client.get_model_version_by_alias(model_name, "champion")
+        cached_model_version = int(mv.version)
+        print(f"Champion model (v{cached_model_version}) successfully loaded and cached.")
         return True
     except Exception as e:
         print(f"Error loading model from MLflow Registry: {e}")
@@ -513,7 +517,7 @@ def home():
 
 @app.post("/predict")
 def predict(record: CreditRecord):
-    global cached_model
+    global cached_model, cached_model_version
     if cached_model is None:
         raise HTTPException(
             status_code=503,
@@ -529,9 +533,25 @@ def predict(record: CreditRecord):
     try:
         pred = int(cached_model.predict(df)[0])
         prob = float(cached_model.predict_proba(df)[0][1])
+        
+        # Log prediction to file for audit and drift monitoring
+        import json
+        from datetime import datetime
+        log_entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "input": record_dict,
+            "prediction": pred,
+            "probability": round(prob, 4),
+            "model_version": cached_model_version
+        }
+        os.makedirs("data", exist_ok=True)
+        with open("data/prediction_log.jsonl", "a") as f:
+            f.write(json.dumps(log_entry) + "\n")
+            
         return {
             "prediction": pred,
-            "probability": round(prob, 4)
+            "probability": round(prob, 4),
+            "model_version": cached_model_version
         }
     except Exception as e:
         raise HTTPException(
@@ -553,6 +573,42 @@ def reload_model():
             status_code=500,
             detail="Failed to reload Production model from Model Registry. See logs."
         )
+
+@app.get("/metrics")
+def get_metrics():
+    """
+    Returns prediction serving metrics such as total predictions, prediction distribution,
+    and current model version.
+    """
+    global cached_model_version
+    import json
+    log_path = "data/prediction_log.jsonl"
+    
+    total_predictions = 0
+    distribution = {0: 0, 1: 0}
+    
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    data = json.loads(line)
+                    total_predictions += 1
+                    pred = data.get("prediction")
+                    if pred in [0, 1]:
+                        distribution[pred] += 1
+        except Exception as e:
+            print(f"Error reading prediction logs: {e}")
+            
+    return {
+        "model_version": cached_model_version,
+        "total_predictions": total_predictions,
+        "prediction_distribution": {
+            "no_default": distribution[0],
+            "default": distribution[1]
+        }
+    }
 
 @app.get("/health")
 def health_check():

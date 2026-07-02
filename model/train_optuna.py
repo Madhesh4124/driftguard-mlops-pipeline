@@ -109,6 +109,19 @@ def run_hpo(X_train, y_train, X_val, y_val, n_trials=30):
     final_model = XGBClassifier(**best_params)
     final_model.fit(X_full_train, y_full_train)
     
+    # Re-evaluate final model on validation set to get final model metrics
+    y_pred_final = final_model.predict(X_val)
+    final_f1 = f1_score(y_val, y_pred_final)
+    final_acc = accuracy_score(y_val, y_pred_final)
+    
+    mlflow.log_metrics({
+        "final_model_f1": final_f1,
+        "final_model_accuracy": final_acc,
+        "n_optuna_trials": n_trials,
+        "training_rows": len(X_full_train),
+    })
+    print(f"[Optuna HPO] Final model trained on {len(X_full_train)} rows. Val F1: {final_f1:.4f}")
+    
     return final_model, best_params
 
 if __name__ == "__main__":

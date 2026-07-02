@@ -3,26 +3,29 @@ from mlflow.tracking import MlflowClient
 
 def get_production_model(model_name):
     """
-    Returns the latest model version object in the 'Production' stage, or None.
+    Returns the latest model version object with the 'champion' alias, or None.
     """
     client = MlflowClient()
-    versions = client.search_model_versions(f"name='{model_name}'")
-    for v in versions:
-        if v.current_stage == "Production":
-            return v
-    return None
+    try:
+        return client.get_model_version_by_alias(model_name, "champion")
+    except Exception:
+        return None
 
 def transition_stage(model_name, version, stage, archive_existing=False):
     """
-    Transition a model version's stage.
+    Transition a model version using aliases: 'champion' for Production,
+    and 'challenger_archived' for Archived.
     """
     client = MlflowClient()
-    return client.transition_model_version_stage(
-        name=model_name,
-        version=version,
-        stage=stage,
-        archive_existing_versions=archive_existing
-    )
+    if stage == "Production":
+        # Setting the alias 'champion' automatically removes it from any other version
+        return client.set_registered_model_alias(model_name, "champion", str(version))
+    elif stage == "Archived":
+        try:
+            client.delete_registered_model_alias(model_name, "champion")
+        except Exception:
+            pass
+        return client.set_registered_model_alias(model_name, "challenger_archived", str(version))
 
 def get_model_version_metric(run_id, metric_key):
     """
